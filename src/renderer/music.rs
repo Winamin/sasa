@@ -222,6 +222,33 @@ impl Renderer for MusicRenderer {
             }
         }
     }
+    fn render_6ch(&mut self, sample_rate: u32, data: &mut [f32]) {
+        self.prepare(sample_rate);
+        if !self.paused {
+            let delta = 1. / sample_rate as f64 * self.settings.playback_rate as f64;
+            let mut position = self.index as f64 * delta;
+            for sample in data.chunks_exact_mut(2) {
+                if let Some(frame) = self.frame(position as f32, delta as f32) {
+                    let frame = self.update_and_get(frame);
+                    sample[0] += frame.0;
+                    sample[1] += frame.1;
+                    sample[2] += frame.2;
+                    sample[3] += frame.3;
+                    sample[4] += frame.4;
+                    sample[5] += frame.5;
+                    sample[6] += frame.6;
+              } else {
+                    break;
+                }
+                position += delta;
+            }
+            if let Some(state) = self.state.upgrade() {
+                state
+                    .position
+                    .store(self.position(delta as f32).to_bits(), Ordering::SeqCst);
+            }
+        }
+    }
 }
 
 pub struct Music {
