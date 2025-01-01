@@ -12,7 +12,7 @@ oboe = ["dep:oboe"]
 anyhow = "1.0.68"
 cpal = { version = "0.14.2", optional = true }
 ringbuf = "0.3.2"
-symphonia = { version = "0.5.4", features = ["mp3", "aac", "wav", "flac", "vorbis", "alac", "opus"] }
+symphonia = { version = "0.5.4", features = ["mp3", "aac", "wav", "flac", "vorbis", "alac"] }
 thiserror = "1.0.38"
 
 oboe = { version = "0.5.0", optional = true, features = ["shared-stdcxx"] }
