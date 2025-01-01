@@ -111,6 +111,7 @@ impl AudioOutputCallback for OboeCallback {
         }
         mixer.sample_rate = stream.get_sample_rate() as u32;
         let raw = frames.as_mut_ptr();
+        
         mixer.render_stereo(unsafe {
             std::slice::from_raw_parts_mut(raw as *mut f32, frames.len() * 2)
         });
