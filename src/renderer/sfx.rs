@@ -62,6 +62,29 @@ impl Renderer for SfxRenderer {
             self.cons.advance(pop_count);
         }
     }
+    fn render_6ch(&mut self, sample_rate: u32, data: &mut [f32]) {
+        let delta = 1. / sample_rate as f32;
+        let mut pop_count = 0;
+        for (position, params) in self.cons.iter_mut() {
+            for sample in data.iter_mut() {
+                if let Some(frame) = self.clip.sample(*position) {
+                    sample[0] += frame.0 * params.amplifier;
+                    sample[1] += frame.1 * params.amplifier;
+                    sample[2] += frame.2 * params.amplifier;
+                    sample[3] += frame.3 * params.amplifier;
+                    sample[4] += frame.4 * params.amplifier;
+                    sample[5] += frame.5 * params.amplifier;
+                } else {
+                    pop_count += 1;
+                    break;
+                }
+                *position += delta;
+            }
+        }
+        unsafe {
+            self.cons.advance(pop_count);
+        }
+    }
 }
 
 pub struct Sfx {
@@ -70,7 +93,7 @@ pub struct Sfx {
 }
 impl Sfx {
     pub(crate) fn new(clip: AudioClip, buffer_size: Option<usize>) -> (Sfx, SfxRenderer) {
-        let (prod, cons) = HeapRb::new(buffer_size.unwrap_or(64)).split();
+        let (prod, cons) = HeapRb::new(buffer_size.unwrap_or(32)).split();
         let arc = Arc::new(());
         let renderer = SfxRenderer {
             clip,
