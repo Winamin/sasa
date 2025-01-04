@@ -4,9 +4,9 @@ use crate::Renderer;
 pub(crate) enum MixerCommand {
     AddRenderer(Box<dyn Renderer>),
 }
+
 pub(crate) struct Mixer {
     pub(crate) sample_rate: u32,
-
     renderers: Vec<Box<dyn Renderer>>,
     cons: HeapConsumer<MixerCommand>,
 }
@@ -15,7 +15,6 @@ impl Mixer {
     pub(crate) fn new(sample_rate: u32, cons: HeapConsumer<MixerCommand>) -> Self {
         Self {
             sample_rate,
-
             renderers: Vec::new(),
             cons,
         }
@@ -23,8 +22,8 @@ impl Mixer {
 
     fn consume_commands(&mut self) {
         for cmd in self.cons.pop_iter() {
-            match cmd {
-                MixerCommand::AddRenderer(renderer) => self.renderers.push(renderer),
+            if let MixerCommand::AddRenderer(renderer) = cmd {
+                self.renderers.push(renderer);
             }
         }
     }
