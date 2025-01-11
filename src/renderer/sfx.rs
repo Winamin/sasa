@@ -70,7 +70,7 @@ pub struct Sfx {
 }
 impl Sfx {
     pub(crate) fn new(clip: AudioClip, buffer_size: Option<usize>) -> (Sfx, SfxRenderer) {
-        let (prod, cons) = HeapRb::new(buffer_size.unwrap_or(32)).split();
+        let (prod, cons) = HeapRb::new(buffer_size.unwrap_or(4096)).split();
         let arc = Arc::new(());
         let renderer = SfxRenderer {
             clip,
