@@ -13,20 +13,10 @@ impl Default for PlaySfxParams {
     }
 }
 
-#[repr(align(64))]
 pub(crate) struct SfxRenderer {
     clip: AudioClip,
     arc: Weak<()>,
     cons: HeapConsumer<(f32, PlaySfxParams)>,
-    sample_cache: SampleCache,
-}
-
-#[derive(Default)]
-struct SampleCache {
-    last_position: f32,
-    last_frame: Frame,
-    delta_reciprocal: f32,
-    buffer: Box<[f32; 1024]>,
 }
 
 impl Renderer for SfxRenderer {
@@ -74,6 +64,7 @@ impl Renderer for SfxRenderer {
     }
 }
 
+<<<<<<< HEAD
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -145,6 +136,8 @@ impl SfxRenderer {
     }
 }
 
+=======
+>>>>>>> parent of 07b2a80 (refactor: all sasa)
 pub struct Sfx {
     _arc: Arc<()>,
     prod: HeapProducer<(f32, PlaySfxParams)>,
@@ -157,7 +150,6 @@ impl Sfx {
             clip,
             arc: Arc::downgrade(&arc),
             cons,
-            sample_cache: SampleCache::default(),
         };
         (Self { _arc: arc, prod }, renderer)
     }
