@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc, Weak,
 };
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 #[derive(Debug, Clone)]
 pub struct MusicParams {
@@ -24,11 +25,13 @@ impl Default for MusicParams {
     }
 }
 
-struct SharedState {
-    position: AtomicU32, // float in bits
+#[repr(align(64))]
+struct AtomicState {
+    position: AtomicU32,
     paused: AtomicBool,
 }
-impl Default for SharedState {
+
+impl Default for AtomicState {
     fn default() -> Self {
         Self {
             position: AtomicU32::default(),
@@ -49,7 +52,7 @@ enum MusicCommand {
 pub(crate) struct MusicRenderer {
     clip: AudioClip,
     settings: MusicParams,
-    state: Weak<SharedState>,
+    state: Weak<AtomicState>,
     cons: HeapConsumer<MusicCommand>,
     paused: bool,
     index: usize,
@@ -59,7 +62,22 @@ pub(crate) struct MusicRenderer {
 
     fade_time: i32,
     fade_current: i32,
+
+    buffer_cache: Box<[f32; 4096]>,
+    #[repr(align(64))]
+    frame_buffer: [(f32, f32); 128],
+
+    #[derive(Default)]
+    cache: AudioCache,
 }
+
+#[derive(Default)]
+struct AudioCache {
+    last_position: f32,
+    last_frame: Frame,
+    sample_rate_reciprocal: f32,
+}
+
 impl MusicRenderer {
     fn prepare(&mut self, sample_rate: u32) {
         if self.last_sample_rate != sample_rate {
@@ -109,6 +127,27 @@ impl MusicRenderer {
                 }
             }
         }
+    }
+
+    #[inline(always)]
+    fn frame(&mut self, position: f32, delta: f32) -> Option<Frame> {
+        let clip_length = self.clip.length();
+        let s = &self.settings;
+        let amp = s.amplifier * self.calculate_fade_amp();
+        
+        if position >= clip_length {
+            return self.handle_loop_case(position, delta, amp);
+        }
+        
+        self.sample_and_amplify(position, amp)
+    }
+
+    #[inline(always)]
+    fn calculate_fade_amp(&self) -> f32 {
+        if self.fade_time == 0 {
+            return 1.0;
+        }
+        self.fade_current as f32 / self.fade_time.abs() as f32
     }
 
     #[inline]
@@ -224,10 +263,34 @@ impl Renderer for MusicRenderer {
     }
 }
 
-pub struct Music {
-    arc: Arc<SharedState>,
-    prod: HeapProducer<MusicCommand>,
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+impl MusicRenderer {
+    #[inline(always)]
+    unsafe fn render_stereo_simd(&mut self, data: &mut [f32], sample_rate: u32) {
+        if is_x86_feature_detected!("avx2") {
+            for chunk in data.chunks_exact_mut(16) {
+                let position = self.index as f64 * self.delta(sample_rate);
+                let frame = self.frame(position as f32, self.delta(sample_rate) as f32);
+                
+                let samples = _mm256_loadu_ps(chunk.as_ptr());
+                let processed = self.process_frame_avx2(samples, frame);
+                _mm256_storeu_ps(chunk.as_mut_ptr(), processed);
+                
+                self.index += 8;
+            }
+        } else if is_x86_feature_detected!("sse4.1") {
+            self.render_stereo_sse(data, sample_rate);
+        }
+    }
 }
+
+pub struct Music {
+    command_sender: Sender<MusicCommand>,
+    state: Arc<AtomicState>,
+}
+
 impl Music {
     pub(crate) fn new(clip: AudioClip, settings: MusicParams) -> (Music, MusicRenderer) {
         let (prod, cons) = HeapRb::new(settings.command_buffer_size).split();
@@ -245,6 +308,11 @@ impl Music {
 
             fade_time: 0,
             fade_current: 0,
+
+            buffer_cache: Box::new([0.0; 4096]),
+            frame_buffer: [(0.0, 0.0); 128],
+
+            cache: AudioCache::default(),
         };
         (Self { arc, prod }, renderer)
     }

@@ -13,10 +13,20 @@ impl Default for PlaySfxParams {
     }
 }
 
+#[repr(align(64))]
 pub(crate) struct SfxRenderer {
     clip: AudioClip,
     arc: Weak<()>,
     cons: HeapConsumer<(f32, PlaySfxParams)>,
+    sample_cache: SampleCache,
+}
+
+#[derive(Default)]
+struct SampleCache {
+    last_position: f32,
+    last_frame: Frame,
+    delta_reciprocal: f32,
+    buffer: Box<[f32; 1024]>,
 }
 
 impl Renderer for SfxRenderer {
@@ -64,6 +74,68 @@ impl Renderer for SfxRenderer {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+impl SfxRenderer {
+    #[inline(always)]
+    unsafe fn render_stereo_simd(&mut self, sample_rate: u32, data: &mut [f32]) {
+        let delta = 1. / sample_rate as f32;
+        let mut pop_count = 0;
+        
+        if is_x86_feature_detected!("avx2") {
+            for (position, params) in self.cons.iter_mut() {
+                let amp = _mm256_set1_ps(params.amplifier);
+                for chunk in data.chunks_exact_mut(8) {
+                    if let Some(frame) = self.clip.sample(*position) {
+                        let frame_vec = _mm256_set_ps(
+                            frame.0, frame.1, frame.0, frame.1,
+                            frame.0, frame.1, frame.0, frame.1
+                        );
+                        let samples = _mm256_loadu_ps(chunk.as_ptr());
+                        let result = _mm256_fmadd_ps(frame_vec, amp, samples);
+                        _mm256_storeu_ps(chunk.as_mut_ptr(), result);
+                    } else {
+                        pop_count += 1;
+                        break;
+                    }
+                    *position += delta * 4.0;
+                }
+            }
+        } else if is_x86_feature_detected!("sse2") {
+            self.render_stereo_sse2(sample_rate, data);
+        } else {
+            self.render_stereo_scalar(sample_rate, data);
+        }
+        
+        unsafe {
+            self.cons.advance(pop_count);
+        }
+    }
+
+    #[inline(always)]
+    fn process_batch(&mut self, data: &mut [f32], sample_rate: u32) {
+        const BATCH_SIZE: usize = 64;
+        let delta = 1. / sample_rate as f32;
+        
+        for chunk in data.chunks_exact_mut(BATCH_SIZE) {
+            std::intrinsics::prefetch_read_data(chunk.as_ptr(), 3);
+            self.process_chunk(chunk, delta);
+        }
+    }
+
+    #[inline(always)]
+    fn process_chunk(&mut self, chunk: &mut [f32], delta: f32) {
+        if self.sample_cache.last_position == 0.0 {
+            self.sample_cache.delta_reciprocal = 1.0 / delta;
+        }
+        
+        unsafe {
+            self.process_chunk_simd(chunk);
+        }
+    }
+}
+
 pub struct Sfx {
     _arc: Arc<()>,
     prod: HeapProducer<(f32, PlaySfxParams)>,
@@ -76,6 +148,7 @@ impl Sfx {
             clip,
             arc: Arc::downgrade(&arc),
             cons,
+            sample_cache: SampleCache::default(),
         };
         (Self { _arc: arc, prod }, renderer)
     }
