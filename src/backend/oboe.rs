@@ -12,6 +12,9 @@ use std::sync::{
     Arc,
 };
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
 pub struct OboeSettings {
     pub buffer_size: Option<u32>,
     pub performance_mode: PerformanceMode,
@@ -32,6 +35,7 @@ pub struct OboeBackend {
     stream: Option<AudioStreamAsync<Output, OboeCallback>>,
     state: Option<Arc<StateCell>>,
     broken: Arc<AtomicBool>,
+    buffer_pool: Vec<Vec<f32>>,
 }
 
 impl OboeBackend {
@@ -41,6 +45,7 @@ impl OboeBackend {
             stream: None,
             state: None,
             broken: Arc::default(),
+            buffer_pool: Vec::new(),
         }
     }
 }
@@ -99,10 +104,16 @@ impl AudioOutputCallback for OboeCallback {
         stream: &mut dyn AudioOutputStreamSafe,
         frames: &mut [(f32, f32)],
     ) -> DataCallbackResult {
+        static mut BUFFER_SIZE_SET: bool = false;
         if let Some(buffer_size) = &self.buffer_size {
-            let _ = stream.set_buffer_size_in_frames(
-                (*buffer_size as i32).min(stream.get_buffer_size_in_frames()),
-            );
+            unsafe {
+                if !BUFFER_SIZE_SET {
+                    let _ = stream.set_buffer_size_in_frames(
+                        (*buffer_size as i32).min(stream.get_buffer_size_in_frames())
+                    );
+                    BUFFER_SIZE_SET = true;
+                }
+            }
         }
 
         let (mixer, rec) = self.state.get();
@@ -135,5 +146,12 @@ impl AudioOutputCallback for OboeCallback {
     ) {
         eprintln!("audio error: {error:?}");
         self.broken.store(true, Ordering::Relaxed);
+    }
+}
+
+unsafe fn render_stereo_simd(buffer: &mut [f32]) {
+    if is_x86_feature_detected!("avx2") {
+    } else {
+        
     }
 }
