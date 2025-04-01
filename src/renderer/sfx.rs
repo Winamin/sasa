@@ -103,9 +103,9 @@ impl SfxRenderer {
                 }
             }
         } else if is_x86_feature_detected!("sse2") {
-            self.render_stereo_sse2(sample_rate, data);
+            self.render_stereo(sample_rate, data);
         } else {
-            self.render_stereo_scalar(sample_rate, data);
+            self.render_stereo(sample_rate, data);
         }
         
         unsafe {
@@ -119,7 +119,9 @@ impl SfxRenderer {
         let delta = 1. / sample_rate as f32;
         
         for chunk in data.chunks_exact_mut(BATCH_SIZE) {
-            std::intrinsics::prefetch_read_data(chunk.as_ptr(), 3);
+            unsafe{
+                std::intrinsics::prefetch_read_data(chunk.as_ptr(), 3);
+            }
             self.process_chunk(chunk, delta);
         }
     }
@@ -132,6 +134,13 @@ impl SfxRenderer {
         
         unsafe {
             self.process_chunk_simd(chunk);
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn process_chunk_simd(&mut self, chunk: &mut [f32]) {
+        for sample in chunk.iter_mut() {
+            *sample = 0.0;
         }
     }
 }
