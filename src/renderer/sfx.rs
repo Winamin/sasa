@@ -28,15 +28,18 @@ impl Renderer for SfxRenderer {
         let delta = 1. / sample_rate as f32;
         let mut pop_count = 0;
         for (position, params) in self.cons.iter_mut() {
+            let amplifier = params.amplifier;
+            let mut pos = *position;
             for sample in data.iter_mut() {
-                if let Some(frame) = self.clip.sample(*position) {
-                    *sample += frame.avg() * params.amplifier;
+                if let Some(frame) = self.clip.sample(pos) {
+                    *sample += frame.avg() * amplifier;
+                    pos += delta;
                 } else {
                     pop_count += 1;
                     break;
                 }
-                *position += delta;
             }
+            *position = pos;
         }
         unsafe {
             self.cons.advance(pop_count);
@@ -47,16 +50,19 @@ impl Renderer for SfxRenderer {
         let delta = 1. / sample_rate as f32;
         let mut pop_count = 0;
         for (position, params) in self.cons.iter_mut() {
+            let amplifier = params.amplifier;
+            let mut pos = *position;
             for sample in data.chunks_exact_mut(2) {
-                if let Some(frame) = self.clip.sample(*position) {
-                    sample[0] += frame.0 * params.amplifier;
-                    sample[1] += frame.1 * params.amplifier;
+                if let Some(frame) = self.clip.sample(pos) {
+                    sample[0] += frame.0 * amplifier;
+                    sample[1] += frame.1 * amplifier;
+                    pos += delta;
                 } else {
                     pop_count += 1;
                     break;
                 }
-                *position += delta;
             }
+            *position = pos;
         }
         unsafe {
             self.cons.advance(pop_count);
