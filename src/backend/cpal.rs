@@ -70,12 +70,10 @@ impl Backend for CpalBackend {
                 let (mixer, rec) = state.get();
                 match channels {
                     1 => {
-                        #[inline(always)]
-                        { mixer.render_mono(data); }
+                        mixer.render_mono(data);
                     }
                     _ => {
-                        #[inline(always)]
-                        { mixer.render_stereo(data); }
+                        mixer.render_stereo(data);
                     }
                 }
                 let ts = info.timestamp();
