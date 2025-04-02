@@ -63,33 +63,28 @@ impl Backend for CpalBackend {
         };
         let state = Arc::clone(self.state.as_ref().unwrap());
         state.get().0.sample_rate = config.sample_rate.0;
-        let stream = (if config.channels == 1 {
-            device.build_output_stream(
-                &config,
-                move |data: &mut [f32], info: &OutputCallbackInfo| {
-                    let (mixer, rec) = state.get();
-                    mixer.render_mono(data);
-                    let ts = info.timestamp();
-                    if let Some(delay) = ts.playback.duration_since(&ts.callback) {
-                        rec.push(delay.as_secs_f32());
+        let channels = config.channels;
+        let stream = device.build_output_stream(
+            &config,
+            move |data: &mut [f32], info: &OutputCallbackInfo| {
+                let (mixer, rec) = state.get();
+                match channels {
+                    1 => {
+                        #[inline(always)]
+                        { mixer.render_mono(data); }
                     }
-                },
-                error_callback,
-            )
-        } else {
-            device.build_output_stream(
-                &config,
-                move |data: &mut [f32], info: &OutputCallbackInfo| {
-                    let (mixer, rec) = state.get();
-                    mixer.render_stereo(data);
-                    let ts = info.timestamp();
-                    if let Some(delay) = ts.playback.duration_since(&ts.callback) {
-                        rec.push(delay.as_secs_f32());
+                    _ => {
+                        #[inline(always)]
+                        { mixer.render_stereo(data); }
                     }
-                },
-                error_callback,
-            )
-        })
+                }
+                let ts = info.timestamp();
+                if let Some(delay) = ts.playback.duration_since(&ts.callback) {
+                    rec.push(delay.as_secs_f32());
+                }
+            },
+            error_callback,
+        )
         .context("failed to build stream")?;
         stream.play()?;
         self.stream = Some(stream);

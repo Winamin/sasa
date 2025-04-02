@@ -26,6 +26,7 @@ impl AudioClip {
     }
 
     pub fn decode(data: Vec<u8>) -> Result<(Vec<Frame>, u32)> {
+        #[inline(always)]
         fn load_frames_from_buffer(
             frames: &mut Vec<Frame>,
             buffer: &symphonia::core::audio::AudioBuffer<f32>,
@@ -37,13 +38,14 @@ impl AudioClip {
                     frames.extend(chan.iter().map(|&it| Frame(it, it)));
                 }
                 _ => {
-                    let iter = buffer.chan(0).iter().zip(buffer.chan(1));
-                    frames.reserve(iter.len());
-                    frames.extend(iter.map(|(left, right)| Frame(*left, *right)))
+                    let mut iter = buffer.chan(0).iter().zip(buffer.chan(1));
+                    frames.reserve(iter.size_hint().0);
+                    frames.extend(iter.map(|(left, right)| Frame(*left, *right)));
                 }
             }
         }
 
+        #[inline(always)]
         fn load_frames_from_buffer_ref(
             frames: &mut Vec<Frame>,
             buffer: &AudioBufferRef,

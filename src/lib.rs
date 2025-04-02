@@ -28,10 +28,12 @@ fn buffer_is_full<E>(_: E) -> anyhow::Error {
 #[derive(Clone, Copy, Default)]
 pub struct Frame(pub f32, pub f32);
 impl Frame {
+    #[inline(always)]
     pub fn avg(&self) -> f32 {
-        (self.0 + self.1) / 2.
+        (self.0 + self.1) * 0.5
     }
 
+    #[inline(always)]
     pub fn interpolate(&self, other: &Self, f: f32) -> Self {
         Self(
             self.0 + (other.0 - self.0) * f,
@@ -75,25 +77,20 @@ impl LatencyRecorder {
         }
     }
 
+    #[inline(always)]
     pub fn push(&mut self, record: f32) {
-        let place = &mut self.records[self.head];
-        self.sum += record - *place;
-        *place = record;
+        let idx = self.head;
+        let prev = self.records[idx];
+        self.records[idx] = record;
+        self.sum += record - prev;
         self.head += 1;
         if self.head == LATENCY_RECORD_NUM {
             self.full = true;
             self.head = 0;
         }
-        self.result.store(
-            (self.sum
-                / (if self.full {
-                    LATENCY_RECORD_NUM
-                } else {
-                    self.head.max(1)
-                }) as f32)
-                .to_bits(),
-            Ordering::SeqCst,
-        );
+        let count = if self.full { LATENCY_RECORD_NUM } else { self.head.max(1) } as f32;
+        // low use Ordering::Relaxed
+        self.result.store((self.sum / count).to_bits(), Ordering::Relaxed);
     }
 }
 
