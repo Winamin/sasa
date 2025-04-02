@@ -182,11 +182,10 @@ impl Renderer for MusicRenderer {
     fn render_mono(&mut self, sample_rate: u32, data: &mut [f32]) {
         self.prepare(sample_rate);
         if !self.paused {
-            //all f32
-            let delta = (1.0_f32 / sample_rate as f32) * self.settings.playback_rate;
-            let mut position = self.index as f32 * delta;
+            let delta = 1. / sample_rate as f64 * self.settings.playback_rate as f64;
+            let mut position = self.index as f64 * delta;
             for sample in data.iter_mut() {
-                if let Some(frame) = self.frame(position, delta) {
+                if let Some(frame) = self.frame(position as f32, delta as f32) {
                     *sample += self.update_and_get(frame).avg();
                 } else {
                     break;
@@ -194,7 +193,9 @@ impl Renderer for MusicRenderer {
                 position += delta;
             }
             if let Some(state) = self.state.upgrade() {
-                state.position.store(self.position(delta).to_bits(), Ordering::Relaxed);
+                state
+                    .position
+                    .store(self.position(delta as f32).to_bits(), Ordering::SeqCst);
             }
         }
     }
@@ -202,20 +203,22 @@ impl Renderer for MusicRenderer {
     fn render_stereo(&mut self, sample_rate: u32, data: &mut [f32]) {
         self.prepare(sample_rate);
         if !self.paused {
-            let delta = (1.0_f32 / sample_rate as f32) * self.settings.playback_rate;
-            let mut position = self.index as f32 * delta;
+            let delta = 1. / sample_rate as f64 * self.settings.playback_rate as f64;
+            let mut position = self.index as f64 * delta;
             for sample in data.chunks_exact_mut(2) {
-                if let Some(frame) = self.frame(position, delta) {
-                    let out = self.update_and_get(frame);
-                    sample[0] += out.0;
-                    sample[1] += out.1;
+                if let Some(frame) = self.frame(position as f32, delta as f32) {
+                    let frame = self.update_and_get(frame);
+                    sample[0] += frame.0;
+                    sample[1] += frame.1;
                 } else {
                     break;
                 }
                 position += delta;
             }
             if let Some(state) = self.state.upgrade() {
-                state.position.store(self.position(delta).to_bits(), Ordering::Relaxed);
+                state
+                    .position
+                    .store(self.position(delta as f32).to_bits(), Ordering::SeqCst);
             }
         }
     }
