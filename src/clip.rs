@@ -6,11 +6,16 @@ use symphonia::core::{
     io::MediaSourceStream,
 };
 
+#[repr(align(32))]
 struct ClipInner {
     frames: Vec<Frame>,
     sample_rate: u32,
+    length: f32,
+    frame_count: usize,
 }
+
 pub struct AudioClip(Arc<ClipInner>);
+
 impl Clone for AudioClip {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
@@ -19,13 +24,19 @@ impl Clone for AudioClip {
 
 impl AudioClip {
     pub fn from_raw(frames: Vec<Frame>, sample_rate: u32) -> Self {
+        let frame_count = frames.len();
+        let length = frame_count as f32 / sample_rate as f32;
         Self(Arc::new(ClipInner {
             frames,
             sample_rate,
+            length,
+            frame_count,
         }))
     }
 
     pub fn decode(data: Vec<u8>) -> Result<(Vec<Frame>, u32)> {
+        const CHUNK_SIZE: usize = 4096;
+
         #[inline(always)]
         fn load_frames_from_buffer(
             frames: &mut Vec<Frame>,
@@ -34,13 +45,26 @@ impl AudioClip {
             match buffer.spec().channels.count() {
                 1 => {
                     let chan = buffer.chan(0);
+                    let current_len = frames.len();
                     frames.reserve(chan.len());
-                    frames.extend(chan.iter().map(|&it| Frame(it, it)));
+                    unsafe {
+                        frames.set_len(current_len + chan.len());
+                    }
+                    for (i, &sample) in chan.iter().enumerate() {
+                        frames[current_len + i] = Frame(sample, sample);
+                    }
                 }
                 _ => {
-                    let mut iter = buffer.chan(0).iter().zip(buffer.chan(1));
-                    frames.reserve(iter.size_hint().0);
-                    frames.extend(iter.map(|(left, right)| Frame(*left, *right)));
+                    let left = buffer.chan(0);
+                    let right = buffer.chan(1);
+                    let current_len = frames.len();
+                    frames.reserve(left.len());
+                    unsafe {
+                        frames.set_len(current_len + left.len());
+                    }
+                    for i in 0..left.len() {
+                        frames[current_len + i] = Frame(left[i], right[i]);
+                    }
                 }
             }
         }
@@ -75,6 +99,7 @@ impl AudioClip {
             }
             Ok(())
         }
+
         let codecs = symphonia::default::get_codecs();
         let probe = symphonia::default::get_probe();
         let mss = MediaSourceStream::new(Box::new(Cursor::new(data)), Default::default());
@@ -86,39 +111,64 @@ impl AudioClip {
                 &Default::default(),
             )?
             .format;
-        let codec_params = &format_reader
+
+        let track = format_reader
             .default_track()
-            .ok_or_else(|| anyhow!("default track not found"))?
-            .codec_params;
+            .ok_or_else(|| anyhow!("default track not found"))?;
+
+        let codec_params = &track.codec_params;
         let sample_rate = codec_params
             .sample_rate
             .ok_or_else(|| anyhow!("unknown sample rate"))?;
-        let mut decoder = codecs.make(codec_params, &Default::default())?;
+        
+        /*
+        magic????
+        let estimated_frames = if let Some(n_frames) = codec_params.n_frames {
+            n_frames as usize
+        } else if let Some(time_base) = codec_params.time_base {
+            (format_reader.duration().unwrap_or(0) as f64 * time_base.seconds_per_ts() * sample_rate as f64) as usize
+        } else {
+            0
+        };
+        
+         */
+
         let mut frames = Vec::new();
-        loop {
-            match format_reader.next_packet() {
-                Ok(packet) => {
+        let mut decoder = codecs.make(codec_params, &Default::default())?;
+
+        // 块处理解码
+        let mut packets = Vec::with_capacity(CHUNK_SIZE);
+        while let Ok(packet) = format_reader.next_packet() {
+            packets.push(packet);
+            if packets.len() >= CHUNK_SIZE {
+                for packet in packets.drain(..) {
                     let buffer = match decoder.decode(&packet) {
                         Ok(buffer) => buffer,
                         Err(symphonia::core::errors::Error::DecodeError(s))
-                            if s.contains("invalid main_data offset") =>
-                        {
-                            continue;
-                        }
+                        if s.contains("invalid main_data offset") =>
+                            {
+                                continue;
+                            }
                         Err(err) => return Err(err.into()),
                     };
                     load_frames_from_buffer_ref(&mut frames, &buffer)?;
                 }
-                Err(error) => match error {
-                    symphonia::core::errors::Error::IoError(error)
-                        if error.kind() == std::io::ErrorKind::UnexpectedEof =>
-                    {
-                        break;
-                    }
-                    _ => bail!(error),
-                },
             }
         }
+        
+        for packet in packets {
+            let buffer = match decoder.decode(&packet) {
+                Ok(buffer) => buffer,
+                Err(symphonia::core::errors::Error::DecodeError(s))
+                if s.contains("invalid main_data offset") =>
+                    {
+                        continue;
+                    }
+                Err(err) => return Err(err.into()),
+            };
+            load_frames_from_buffer_ref(&mut frames, &buffer)?;
+        }
+
         Ok((frames, sample_rate))
     }
 
@@ -127,14 +177,28 @@ impl AudioClip {
         let (frames, sample_rate) = Self::decode(data)?;
         Ok(Self::from_raw(frames, sample_rate))
     }
-
+    
     pub fn sample(&self, position: f32) -> Option<Frame> {
         let position = position * self.0.sample_rate as f32;
         let actual_index = position as usize;
-        self.0.frames.get(actual_index).and_then(|frame| {
-            let next_frame = self.0.frames.get(actual_index + 1).unwrap_or(frame);
-            Some(frame.interpolate(next_frame, position - actual_index as f32))
-        })
+        
+        if actual_index >= self.0.frame_count {
+            return None;
+        }
+
+        let frame = self.0.frames[actual_index];
+        let t = position - actual_index as f32;
+        
+        if t < f32::EPSILON {
+            return Some(frame);
+        }
+
+        if actual_index + 1 >= self.0.frame_count {
+            return Some(frame);
+        }
+
+        let next_frame = self.0.frames[actual_index + 1];
+        Some(frame.interpolate(&next_frame, t))
     }
 
     #[inline(always)]
@@ -149,10 +213,11 @@ impl AudioClip {
 
     #[inline(always)]
     pub fn frame_count(&self) -> usize {
-        self.0.frames.len()
+        self.0.frame_count
     }
 
+    #[inline(always)]
     pub fn length(&self) -> f32 {
-        self.frame_count() as f32 / self.sample_rate() as f32
+        self.0.length
     }
 }
