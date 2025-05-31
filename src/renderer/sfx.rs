@@ -28,51 +28,54 @@ impl Renderer for SfxRenderer {
     fn render_mono(&mut self, sample_rate: u32, data: &mut [f32]) {
         let delta = 1. / sample_rate as f32;
         let mut pop_count = 0;
+        let clip = &self.clip;
 
         for (position, params) in self.cons.iter_mut() {
             let amplifier = params.amplifier;
             let mut pos = *position;
             let mut buffer_index = 0;
             let total_samples = data.len();
-            
-            let chunks = total_samples / 4;
-            for _ in 0..chunks {
-                let frame0 = self.clip.sample(pos);
-                let frame1 = self.clip.sample(pos + delta);
-                let frame2 = self.clip.sample(pos + delta * 2.0);
-                let frame3 = self.clip.sample(pos + delta * 3.0);
-                
-                if let (Some(f0), Some(f1), Some(f2), Some(f3)) = (frame0, frame1, frame2, frame3) {
-                    let amps = [amplifier; 4];
-                    let samples = [
-                        f0.avg() * amps[0],
-                        f1.avg() * amps[1],
-                        f2.avg() * amps[2],
-                        f3.avg() * amps[3],
-                    ];
-                    
-                    for (i, sample) in samples.iter().enumerate() {
-                        data[buffer_index + i] += sample;
-                    }
 
-                    buffer_index += 4;
-                    pos += delta * 4.0;
+            // Process samples in batches of 8
+            let chunks = total_samples / 8;
+            for _ in 0..chunks {
+                let mut valid = true;
+                let mut samples = [0.0; 8];
+
+                // Unroll the sampling loop
+                for i in 0..8 {
+                    if let Some(frame) = clip.sample(pos + delta * i as f32) {
+                        samples[i] = (frame.0 + frame.1) * 0.5 * amplifier;
+                    } else {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                if valid {
+                    // Batch write to output buffer
+                    for i in 0..8 {
+                        data[buffer_index + i] += samples[i];
+                    }
+                    buffer_index += 8;
+                    pos += delta * 8.0;
                 } else {
                     break;
                 }
             }
-            
+
+            // Process remaining samples (0-7)
             let remaining = total_samples - buffer_index;
             for i in 0..remaining {
-                if let Some(frame) = self.clip.sample(pos) {
-                    data[buffer_index + i] += frame.avg() * amplifier;
+                if let Some(frame) = clip.sample(pos) {
+                    data[buffer_index + i] += (frame.0 + frame.1) * 0.5 * amplifier;
                     pos += delta;
                 } else {
                     pop_count += 1;
                     break;
                 }
             }
-            
+
             if pop_count == 0 {
                 *position = pos;
             }
@@ -86,6 +89,7 @@ impl Renderer for SfxRenderer {
     fn render_stereo(&mut self, sample_rate: u32, data: &mut [f32]) {
         let delta = 1. / sample_rate as f32;
         let mut pop_count = 0;
+        let clip = &self.clip;
 
         for (position, params) in self.cons.iter_mut() {
             let amplifier = params.amplifier;
@@ -93,40 +97,42 @@ impl Renderer for SfxRenderer {
             let total_samples = data.len();
             let total_frames = total_samples / 2;
             let mut frame_index = 0;
-            
-            let chunks = total_frames / 4;
-            for _ in 0..chunks {
-                let frames = [
-                    self.clip.sample(pos),
-                    self.clip.sample(pos + delta),
-                    self.clip.sample(pos + delta * 2.0),
-                    self.clip.sample(pos + delta * 3.0),
-                ];
-                
-                if let [Some(f0), Some(f1), Some(f2), Some(f3)] = frames {
-                    let base_index = frame_index * 2;
-                    
-                    data[base_index] += f0.0 * amplifier;
-                    data[base_index + 2] += f1.0 * amplifier;
-                    data[base_index + 4] += f2.0 * amplifier;
-                    data[base_index + 6] += f3.0 * amplifier;
-                    
-                    data[base_index + 1] += f0.1 * amplifier;
-                    data[base_index + 3] += f1.1 * amplifier;
-                    data[base_index + 5] += f2.1 * amplifier;
-                    data[base_index + 7] += f3.1 * amplifier;
 
-                    frame_index += 4;
-                    pos += delta * 4.0;
+            // Process frames in batches of 8
+            let chunks = total_frames / 8;
+            for _ in 0..chunks {
+                let mut frames = [(0.0, 0.0); 8];
+                let mut valid = true;
+
+                // Unroll the sampling loop
+                for i in 0..8 {
+                    if let Some(frame) = clip.sample(pos + delta * i as f32) {
+                        frames[i] = (frame.0, frame.1);
+                    } else {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                if valid {
+                    let base_index = frame_index * 2;
+                    // Write batch to output buffer
+                    for i in 0..8 {
+                        let idx = base_index + i * 2;
+                        data[idx] += frames[i].0 * amplifier;
+                        data[idx + 1] += frames[i].1 * amplifier;
+                    }
+                    frame_index += 8;
+                    pos += delta * 8.0;
                 } else {
                     break;
                 }
             }
 
-            // 处理剩余帧（0-3帧）
+            // Process remaining frames (0-7)
             let remaining = total_frames - frame_index;
             for i in 0..remaining {
-                if let Some(frame) = self.clip.sample(pos) {
+                if let Some(frame) = clip.sample(pos) {
                     let idx = (frame_index + i) * 2;
                     data[idx] += frame.0 * amplifier;
                     data[idx + 1] += frame.1 * amplifier;
@@ -136,7 +142,7 @@ impl Renderer for SfxRenderer {
                     break;
                 }
             }
-            
+
             if pop_count == 0 {
                 *position = pos;
             }
